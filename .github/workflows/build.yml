@@ -1,4 +1,4 @@
-name: Pure Android Build
+name: Direct Android SDK Build
 
 on:
   push:
@@ -19,35 +19,44 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Create Minimal Project Config
+    - name: Build APK directly via Android SDK Tools
       run: |
-        # Автоматически создаем файлы окружения, чтобы компилятор не паниковал
-        echo "pluginManagement { repositories { google(); mavenCentral() } }" > settings.gradle
-        echo "rootProject.name = 'rog-touch-engine'" >> settings.gradle
+        # 1. Задаем пути к официальным утилитам Google SDK
+        SDK_BUILD_TOOLS="${ANDROID_HOME}/build-tools/34.0.0"
+        PLATFORM="${ANDROID_HOME}/platforms/android-34/android.jar"
         
-        echo "android.useAndroidX=true" > gradle.properties
+        # 2. Создаем чистые папки для сборки
+        mkdir -p obj bin app/src/main/java/com/android/internal/hardware/rogtouchengine
         
-        # Переносим build.gradle в правильную подпапку app/
-        mkdir -p app
-        if [ -f build.gradle ]; then
-          mv build.gradle app/build.gradle
+        # На всякий случай проверяем, где лежит Java-файл
+        if [ -f MainActivity.java ]; then
+          mv MainActivity.java app/src/main/java/com/android/internal/hardware/rogtouchengine/MainActivity.java
+        fi
+        if [ -f AndroidManifest.xml ]; then
+          mv AndroidManifest.xml app/src/main/AndroidManifest.xml
         fi
 
-    - name: Setup Gradle Environment
-      uses: gradle/actions/setup-gradle@v4
+        echo "=== Шаг 1: Компиляция ресурсов ==="
+        $SDK_BUILD_TOOLS/aapt package -f -m -J obj -M app/src/main/AndroidManifest.xml -I $PLATFORM
 
-    - name: Force Build APK
-      run: |
-        # Скачиваем официальный инструмент сборки напрямую
-        gradle init --type basic --dsl groovy --incubating
-        gradle wrapper --gradle-version 8.4
-        chmod +x gradlew
-        ./gradlew :app:assembleDebug --stacktrace
-      continue-on-error: true
+        echo "=== Шаг 2: Компиляция Java кода ==="
+        javac -d obj -classpath $PLATFORM obj/com/android/internal/hardware/rogtouchengine/R.java app/src/main/java/com/android/internal/hardware/rogtouchengine/MainActivity.java
 
-    - name: Extract and Upload Target APK
+        echo "=== Шаг 3: Перевод в байт-код Dalvik (DEX) ==="
+        $SDK_BUILD_TOOLS/d8 --output bin/ obj/com/android/internal/hardware/rogtouchengine/*.class
+
+        echo "=== Шаг 4: Упаковка финального APK ==="
+        $SDK_BUILD_TOOLS/aapt package -f -M app/src/main/AndroidManifest.xml -I $PLATFORM -F bin/rog-touch-engine.apk bin
+
+        echo "=== Шаг 5: Выравнивание и подпись (чтобы Android разрешил установку) ==="
+        $SDK_BUILD_TOOLS/zipalign -f 4 bin/rog-touch-engine.apk app-debug.apk
+        
+        # Создаем временный ключ и подписываем apk
+        keytool -genkeypair -validity 1000 -dname "CN=Android,O=Android,C=US" -keystore keystore.jks -storepass android -keypass android -alias androidkey -keyalg RSA
+        $SDK_BUILD_TOOLS/apksigner sign --ks keystore.jks --ks-pass pass:android --key-pass pass:android --out app-debug.apk app-debug.apk
+
+    - name: Upload Finished APK
       uses: actions/upload-artifact@v4
       with:
         name: ROG-Touch-Engine-APK
-        path: "**/build/outputs/apk/debug/*.apk"
-        
+        path: app-debug.apk

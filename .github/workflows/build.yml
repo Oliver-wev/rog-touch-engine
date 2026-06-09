@@ -25,11 +25,11 @@ jobs:
         SDK_BUILD_TOOLS="${ANDROID_HOME}/build-tools/34.0.0"
         PLATFORM="${ANDROID_HOME}/platforms/android-34/android.jar"
         
-        # 2. Создаем чистую целевую структуру папок в нижнем регистре
+        # 2. Создаем чистую целевую структуру папок
         mkdir -p src/main/java/com/android/internal/hardware/rogtouchengine
         mkdir -p obj bin
 
-        # 3. Умный поиск: находим файлы пользователя, где бы они ни лежали, и копируем в правильные места
+        # 3. Находим файлы пользователя и копируем в правильные места
         MANIFEST_PATH=$(find . -name "AndroidManifest.xml" -not -path "*/src/main/*" | head -n 1)
         if [ -z "$MANIFEST_PATH" ]; then
           MANIFEST_PATH=$(find . -name "AndroidManifest.xml" | head -n 1)
@@ -42,17 +42,18 @@ jobs:
         fi
         cp "$JAVA_PATH" src/main/java/com/android/internal/hardware/rogtouchengine/MainActivity.java
 
-        echo "=== Проверка путей ==="
-        ls -R src
-
         echo "=== Шаг 1: Компиляция ресурсов ==="
         $SDK_BUILD_TOOLS/aapt package -f -m -J obj -M src/main/AndroidManifest.xml -I $PLATFORM
 
         echo "=== Шаг 2: Компиляция Java кода ==="
-        javac -d obj -classpath $PLATFORM obj/com/android/internal/hardware/rogtouchengine/R.java src/main/java/com/android/internal/hardware/rogtouchengine/MainActivity.java
+        # Добавили автоматический поиск сгенерированного R.java, чтобы javac его не терял
+        R_FILE=$(find obj -name "R.java")
+        javac -d obj -classpath $PLATFORM "$R_FILE" src/main/java/com/android/internal/hardware/rogtouchengine/MainActivity.java
 
         echo "=== Шаг 3: Перевод в DEX ==="
-        $SDK_BUILD_TOOLS/d8 --output bin/ obj/com/android/internal/hardware/rogtouchengine/*.class
+        # Собираем все скомпилированные классы из папки obj
+        find obj -name "*.class" > classes.txt
+        $SDK_BUILD_TOOLS/d8 --output bin/ $(cat classes.txt)
 
         echo "=== Шаг 4: Упаковка APK ==="
         $SDK_BUILD_TOOLS/aapt package -f -M src/main/AndroidManifest.xml -I $PLATFORM -F bin/rog-touch-engine.apk bin

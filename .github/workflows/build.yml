@@ -1,4 +1,4 @@
-name: Direct Android SDK Build
+name: Fixed Direct Android SDK Build
 
 on:
   push:
@@ -19,39 +19,46 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Build APK directly via Android SDK Tools
+    - name: Auto-Fix Paths and Build APK
       run: |
-        # 1. Задаем пути к официальным утилитам Google SDK
+        # 1. Задаем пути к утилитам Android SDK
         SDK_BUILD_TOOLS="${ANDROID_HOME}/build-tools/34.0.0"
         PLATFORM="${ANDROID_HOME}/platforms/android-34/android.jar"
         
-        # 2. Создаем чистые папки для сборки
-        mkdir -p obj bin app/src/main/java/com/android/internal/hardware/rogtouchengine
-        
-        # На всякий случай проверяем, где лежит Java-файл
-        if [ -f MainActivity.java ]; then
-          mv MainActivity.java app/src/main/java/com/android/internal/hardware/rogtouchengine/MainActivity.java
+        # 2. Создаем чистую целевую структуру папок в нижнем регистре
+        mkdir -p src/main/java/com/android/internal/hardware/rogtouchengine
+        mkdir -p obj bin
+
+        # 3. Умный поиск: находим файлы пользователя, где бы они ни лежали, и копируем в правильные места
+        MANIFEST_PATH=$(find . -name "AndroidManifest.xml" -not -path "*/src/main/*" | head -n 1)
+        if [ -z "$MANIFEST_PATH" ]; then
+          MANIFEST_PATH=$(find . -name "AndroidManifest.xml" | head -n 1)
         fi
-        if [ -f AndroidManifest.xml ]; then
-          mv AndroidManifest.xml app/src/main/AndroidManifest.xml
+        cp "$MANIFEST_PATH" src/main/AndroidManifest.xml
+
+        JAVA_PATH=$(find . -name "MainActivity.java" -not -path "*/src/main/*" | head -n 1)
+        if [ -z "$JAVA_PATH" ]; then
+          JAVA_PATH=$(find . -name "MainActivity.java" | head -n 1)
         fi
+        cp "$JAVA_PATH" src/main/java/com/android/internal/hardware/rogtouchengine/MainActivity.java
+
+        echo "=== Проверка путей ==="
+        ls -R src
 
         echo "=== Шаг 1: Компиляция ресурсов ==="
-        $SDK_BUILD_TOOLS/aapt package -f -m -J obj -M app/src/main/AndroidManifest.xml -I $PLATFORM
+        $SDK_BUILD_TOOLS/aapt package -f -m -J obj -M src/main/AndroidManifest.xml -I $PLATFORM
 
         echo "=== Шаг 2: Компиляция Java кода ==="
-        javac -d obj -classpath $PLATFORM obj/com/android/internal/hardware/rogtouchengine/R.java app/src/main/java/com/android/internal/hardware/rogtouchengine/MainActivity.java
+        javac -d obj -classpath $PLATFORM obj/com/android/internal/hardware/rogtouchengine/R.java src/main/java/com/android/internal/hardware/rogtouchengine/MainActivity.java
 
-        echo "=== Шаг 3: Перевод в байт-код Dalvik (DEX) ==="
+        echo "=== Шаг 3: Перевод в DEX ==="
         $SDK_BUILD_TOOLS/d8 --output bin/ obj/com/android/internal/hardware/rogtouchengine/*.class
 
-        echo "=== Шаг 4: Упаковка финального APK ==="
-        $SDK_BUILD_TOOLS/aapt package -f -M app/src/main/AndroidManifest.xml -I $PLATFORM -F bin/rog-touch-engine.apk bin
+        echo "=== Шаг 4: Упаковка APK ==="
+        $SDK_BUILD_TOOLS/aapt package -f -M src/main/AndroidManifest.xml -I $PLATFORM -F bin/rog-touch-engine.apk bin
 
-        echo "=== Шаг 5: Выравнивание и подпись (чтобы Android разрешил установку) ==="
+        echo "=== Шаг 5: Выравнивание и подпись ==="
         $SDK_BUILD_TOOLS/zipalign -f 4 bin/rog-touch-engine.apk app-debug.apk
-        
-        # Создаем временный ключ и подписываем apk
         keytool -genkeypair -validity 1000 -dname "CN=Android,O=Android,C=US" -keystore keystore.jks -storepass android -keypass android -alias androidkey -keyalg RSA
         $SDK_BUILD_TOOLS/apksigner sign --ks keystore.jks --ks-pass pass:android --key-pass pass:android --out app-debug.apk app-debug.apk
 
